@@ -1,12 +1,14 @@
+name: VPS Session
+
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
+    - cron: '0 */6 * * *'  # Setiap 6 jam
   workflow_dispatch:
 
 jobs:
   vps-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # Just under 6 hours
+    timeout-minutes: 350  # Sedikit di bawah 6 jam
 
     steps:
       - name: Checkout repo
@@ -28,8 +30,7 @@ jobs:
           sudo apt install -y curl unzip sudo net-tools neofetch openssh-server
 
       - name: Install Tailscale official script
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
+        run: curl -fsSL https://tailscale.com/install.sh | sh
 
       - name: Restore backup files
         run: |
@@ -39,28 +40,35 @@ jobs:
             echo "No backup found, starting fresh"
           fi
 
-      - name: Restore Tailscale state
+      - name: Clean old Tailscale state
         run: |
-          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
-            sudo mkdir -p /var/lib/tailscale
-            sudo cp /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
-            sudo chmod 600 /var/lib/tailscale/tailscaled.state
-          fi
+          sudo pkill tailscaled || true
+          sleep 2
+          sudo rm -rf /var/lib/tailscale/* 2>/dev/null || true
+          sudo rm -f /var/run/tailscale/tailscaled.sock 2>/dev/null || true
+          echo "🧹 Old Tailscale state cleaned"
 
       - name: Start Tailscale
         run: |
-          sudo tailscaled &
-          sleep 8
-          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo || echo "Tailscale already up"
+          sudo tailscaled --tun=userspace-networking &
+          sleep 10
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo
+          echo "✅ Tailscale connected!"
+          sudo tailscale ip -4
 
       - name: Create user itz_ytansh with sudo
         run: |
+          set -e
           if ! id -u itz_ytansh >/dev/null 2>&1; then
             sudo useradd -m -s /bin/bash itz_ytansh
-            echo "itz_ytansh:itz_ytansh" | sudo chpasswd
             sudo usermod -aG sudo itz_ytansh
             echo "itz_ytansh ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/itz_ytansh
+            echo "itz_ytansh:itz_ytansh" | sudo chpasswd
+            echo "✅ User created"
+          else
+            echo "⚠️ User already exists"
           fi
+        timeout-minutes: 2
 
       - name: Setup SSH Server
         run: |
@@ -68,23 +76,24 @@ jobs:
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo service ssh restart
+          echo "✅ SSH server ready"
 
       - name: Show Tailscale IP and SSH info
         run: |
           echo "==================================="
-          echo "🔗 Tailscale IP lo:"
-          tailscale ip -4 || echo "Tailscale IP not found"
+          echo "🔗 Tailscale IP:"
+          sudo tailscale ip -4 || echo "❌ Tailscale IP not found"
           echo ""
           echo "📡 Hostname Tailscale: biralo"
           echo "👤 User: itz_ytansh"
           echo "🔑 Password: itz_ytansh"
           echo ""
           echo "👉 Cara SSH dari HP/PC lo:"
-          echo "   ssh itz_ytansh@$(tailscale ip -4)"
+          echo "   ssh itz_ytansh@$(sudo tailscale ip -4 2>/dev/null)"
           echo "==================================="
 
       - name: Sleep to keep VPS alive
-        run: sleep 21600  # 6 hours
+        run: sleep 21600  # 6 jam
 
       - name: Backup VPS data and tailscale state
         run: |
@@ -92,6 +101,7 @@ jobs:
           sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/ 2>/dev/null || true
           sudo chown -R $USER:$USER /opt/vps-backup
           zip -r backup.zip /opt/vps-backup
+          echo "✅ Backup created"
 
       - name: Upload VPS backup artifact
         uses: actions/upload-artifact@v4
